@@ -1,17 +1,26 @@
 import { Client } from 'boardgame.io/client';
 import { SocketIO } from 'boardgame.io/multiplayer';
-import { TicTacToe } from './games/tic-tac-toe/game.js';
+import QRCode from 'qrcode';
+import { catalog } from './games/index.js';
 
-const SERVER = `${location.protocol}//${location.hostname}:8000`;
+const SERVER = import.meta.env.PROD
+  ? location.origin
+  : `${location.protocol}//${location.hostname}:8000`;
 const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 const matchID = params.get('match');
+const gameID = params.get('game');
 const view = params.get('view');
-const SYMBOL = { 0: 'X', 1: 'O' };
+const entry = catalog.find((g) => g.id === gameID);
 
-// Talks to the server's built-in "lobby" (create a match, join a seat)
-async function api(path, body) {
-  const res = await fetch(`${SERVER}/games/tic-tac-toe/${path}`, {
+// Makes untrusted text (like nicknames) safe to put into HTML
+const esc = (s) =>
+  String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+  );
+
+async function api(game, path, body) {
+  const res = await fetch(`${SERVER}/games/${game}/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -20,46 +29,88 @@ async function api(path, body) {
   return res.json();
 }
 
-function boardHTML(cells, canPlay) {
+// Which game does this room code belong to?
+async function findGame(code) {
+  for (const g of catalog) {
+    try {
+      const res = await fetch(`${SERVER}/games/${g.id}/${encodeURIComponent(code)}`);
+      if (res.ok) return g.id;
+    } catch (e) {
+      /* try the next game */
+    }
+  }
+  return null;
+}
+
+// Turns a player id into a safe display name
+function makeNamer(client) {
+  const names = {};
+  (client.matchData || []).forEach((p) => (names[p.id] = p.name));
+  return (id) => esc(names[id] || `Player ${Number(id) + 1}`);
+}
+
+function seatsHTML(client) {
   return (
-    '<div class="board">' +
-    cells
-      .map((c, i) => {
-        const enabled = canPlay && c === null;
-        return `<button class="cell" data-cell="${i}" ${enabled ? '' : 'disabled'}>${
-          c === null ? '' : SYMBOL[c]
-        }</button>`;
-      })
+    '<ul class="seats">' +
+    (client.matchData || [])
+      .map((p) => `<li>${p.name ? esc(p.name) : '<em>waiting…</em>'}</li>`)
       .join('') +
-    '</div>'
+    '</ul>'
   );
 }
 
-function statusText(state, client) {
-  const names = {};
-  (client.matchData || []).forEach((p) => (names[p.id] = p.name));
-  const name = (id) => names[id] || `Player ${id}`;
-  const { ctx } = state;
-  if (ctx.gameover) {
-    return ctx.gameover.draw ? "It's a draw!" : `${name(ctx.gameover.winner)} wins! 🎉`;
-  }
-  return `${name(ctx.currentPlayer)}'s turn (${SYMBOL[ctx.currentPlayer]})`;
+function allJoined(client) {
+  const seats = client.matchData || [];
+  return seats.length > 0 && seats.every((p) => p.name);
 }
 
-// ---- Home: start a new game ----
+// ---- Home: pick a game to host, or join with a code ----
 function home() {
-  app.innerHTML = '<h1>Party Games</h1><button id="create">Start Tic-Tac-Toe</button>';
-  document.getElementById('create').onclick = async () => {
-    const { matchID } = await api('create', { numPlayers: 2 });
-    location.search = `?match=${matchID}&view=tv`;
+  const cards = catalog
+    .map((g) => {
+      const { minPlayers, maxPlayers } = g.game;
+      let buttons = '';
+      for (let n = minPlayers; n <= maxPlayers; n++) {
+        const label = minPlayers === maxPlayers ? 'Start' : `${n} players`;
+        buttons += `<button data-start="${g.id}" data-n="${n}">${label}</button> `;
+      }
+      return `<div class="player"><h3>${esc(g.name)}</h3><p>${esc(g.description)}</p>${buttons}</div>`;
+    })
+    .join('');
+  app.innerHTML = `
+    <h1>Party Games</h1>
+    <h2>Host a game</h2>
+    <p>Do this on the big screen.</p>
+    <div class="players">${cards}</div>
+    <h2>Join a game</h2>
+    <p>Do this on your phone.</p>
+    <input id="code" placeholder="ROOM CODE" maxlength="4" autocapitalize="characters" />
+    <br /><button id="join">Join</button>
+    <p id="err" class="warn"></p>`;
+  app.querySelectorAll('[data-start]').forEach((b) => {
+    b.onclick = async () => {
+      const { matchID: newID } = await api(b.dataset.start, 'create', {
+        numPlayers: Number(b.dataset.n),
+      });
+      location.search = `?game=${b.dataset.start}&match=${newID}&view=tv`;
+    };
+  });
+  document.getElementById('join').onclick = async () => {
+    const code = document.getElementById('code').value.trim().toUpperCase();
+    if (!code) return;
+    const found = await findGame(code);
+    if (found) location.search = `?game=${found}&match=${encodeURIComponent(code)}`;
+    else document.getElementById('err').textContent = 'No room with that code.';
   };
 }
 
-// ---- TV view: public, read-only (no playerID = spectator) ----
-function tv() {
-  const joinURL = `${location.origin}/?match=${matchID}`;
+// ---- TV view: lobby, then the game's public screen (spectator) ----
+async function tv() {
+  const joinURL = `${location.origin}/?game=${gameID}&match=${matchID}`;
+  const qr = await QRCode.toDataURL(joinURL, { width: 280, margin: 2 });
+  const isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
   const client = Client({
-    game: TicTacToe,
+    game: entry.game,
     matchID,
     multiplayer: SocketIO({ server: SERVER }),
   });
@@ -69,49 +120,104 @@ function tv() {
       app.innerHTML = '<p>Connecting…</p>';
       return;
     }
+    if (!allJoined(client)) {
+      app.innerHTML = `
+        <h1>${esc(entry.name)}</h1>
+        <p>Go to this site on your phone and enter the code, or scan:</p>
+        <p class="code">${esc(matchID)}</p>
+        <img class="qr" src="${qr}" alt="QR code to join" />
+        <p>${esc(joinURL)}</p>
+        ${isLocal ? '<p class="warn">Phones cannot reach "localhost". Open this page using the Network address instead.</p>' : ''}
+        ${seatsHTML(client)}`;
+      return;
+    }
     app.innerHTML = `
-      <h1>Tic-Tac-Toe</h1>
-      <p>Players join at: <a href="${joinURL}" target="_blank">${joinURL}</a></p>
-      <h2>${statusText(state, client)}</h2>
-      ${boardHTML(state.G.cells, false)}`;
+      <h1>${esc(entry.name)}</h1>
+      <p>Room ${esc(matchID)}</p>
+      ${entry.views.tv({ state, name: makeNamer(client) })}
+      <p><a href="/">New game</a></p>`;
   });
 }
 
-// ---- Phone view: personal, with controls ----
-async function phone() {
-  const key = `seat-${matchID}`;
-  let seat = JSON.parse(sessionStorage.getItem(key) || 'null');
-  if (!seat) {
-    const name = prompt('Your nickname?') || 'Player';
-    const { playerID, playerCredentials } = await api(`${matchID}/join`, {
-      playerName: name,
-    });
-    seat = { playerID, credentials: playerCredentials };
-    sessionStorage.setItem(key, JSON.stringify(seat));
-  }
+// ---- Phone view ----
+function joinForm() {
+  app.innerHTML = `
+    <h1>${esc(entry.name)}</h1>
+    <p>Room ${esc(matchID)}</p>
+    <input id="nick" placeholder="Your nickname" maxlength="12" />
+    <br /><button id="go">Join</button>
+    <p id="err" class="warn"></p>`;
+  document.getElementById('go').onclick = async () => {
+    const name = document.getElementById('nick').value.trim() || 'Player';
+    try {
+      const { playerID, playerCredentials } = await api(gameID, `${matchID}/join`, {
+        playerName: name,
+      });
+      const seat = { playerID, credentials: playerCredentials };
+      sessionStorage.setItem(`seat-${gameID}-${matchID}`, JSON.stringify(seat));
+      playPhone(seat);
+    } catch (e) {
+      document.getElementById('err').textContent =
+        'Could not join. Check the code, or the room may be full.';
+    }
+  };
+}
+
+function playPhone(seat) {
+  let lastState = null;
   const client = Client({
-    game: TicTacToe,
+    game: entry.game,
     matchID,
     playerID: seat.playerID,
     credentials: seat.credentials,
     multiplayer: SocketIO({ server: SERVER }),
   });
+
+  function draw() {
+    const state = lastState;
+    if (!state) return;
+    if (!allJoined(client)) {
+      app.innerHTML = `<h2>You're in!</h2><p>Waiting for other players…</p>${seatsHTML(client)}`;
+      return;
+    }
+    app.innerHTML = entry.views.phone({
+      state,
+      name: makeNamer(client),
+      playerID: seat.playerID,
+    });
+    if (entry.views.bindPhone) {
+      entry.views.bindPhone({
+        root: app,
+        state,
+        playerID: seat.playerID,
+        moves: client.moves,
+        redraw: draw,
+      });
+    }
+  }
+
   client.start();
   client.subscribe((state) => {
     if (!state) return;
-    const myTurn = state.ctx.currentPlayer === seat.playerID && !state.ctx.gameover;
-    app.innerHTML = `
-      <h2>You are ${SYMBOL[seat.playerID]}</h2>
-      <p>${statusText(state, client)}</p>
-      ${boardHTML(state.G.cells, myTurn)}`;
-    app.querySelectorAll('[data-cell]').forEach((b) => {
-      b.onclick = () => client.moves.clickCell(Number(b.dataset.cell));
-    });
+    lastState = state;
+    draw();
   });
 }
 
+function phone() {
+  const saved = JSON.parse(
+    sessionStorage.getItem(`seat-${gameID}-${matchID}`) || 'null'
+  );
+  if (saved) playPhone(saved);
+  else joinForm();
+}
+
+function notFound() {
+  app.innerHTML = '<p>That link looks incomplete. <a href="/">Back to start</a></p>';
+}
+
 // ---- Decide which screen to show ----
-const run = !matchID ? home : view === 'tv' ? tv : phone;
+const run = !matchID ? home : !entry ? notFound : view === 'tv' ? tv : phone;
 Promise.resolve(run()).catch((e) => {
-  app.innerHTML = `<p>Something went wrong: ${e.message}</p>`;
+  app.innerHTML = `<p>Something went wrong: ${esc(e.message)}</p>`;
 });

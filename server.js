@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import serve from 'koa-static';
 import boardgameServer from 'boardgame.io/dist/cjs/server.js';
 import { catalog } from './games/index.js';
+import { triviaSource } from './games/trivia/game.js';
+import { takeQuestions, startQuestionBank } from './games/trivia/bank.js';
 
 const { Server, Origins } = boardgameServer;
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +21,10 @@ const LAN =
 
 // The public address of the deployed site (Render provides the first one itself)
 const publicOrigins = [process.env.RENDER_EXTERNAL_URL, process.env.PUBLIC_ORIGIN].filter(Boolean);
+
+// Trivia questions are fetched here on the server, so answers never reach browsers
+triviaSource.take = takeQuestions;
+startQuestionBank();
 
 const server = Server({
   games: catalog.map((g) => g.game),

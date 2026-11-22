@@ -1,6 +1,6 @@
 import boardgameClient from 'boardgame.io/dist/cjs/client.js';
 const { Client } = boardgameClient;
-import { TicTacToe } from './games/tic-tac-toe/game.js';
+import { game as TicTacToe } from './games/tic-tac-toe/server.js';
 
 const client = Client({ game: TicTacToe });
 client.start();

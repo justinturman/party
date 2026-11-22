@@ -17,7 +17,7 @@ function isDraw(cells) {
   return cells.every((cell) => cell !== null);
 }
 
-export const TicTacToe = {
+export const game = {
   name: 'tic-tac-toe',
   minPlayers: 2,
   maxPlayers: 2,

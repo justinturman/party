@@ -5,45 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Party Games</title>
     <style>
-      body { font-family: sans-serif; text-align: center; background: #1e1e2f; color: #fff; }
+      body { margin: 0; font-family: sans-serif; text-align: center; background: #1e1e2f; color: #fff; }
+      .page { padding: 1rem; }
       button { font-size: 1.2rem; padding: 0.6rem 1.2rem; }
-      .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
-               width: min(80vw, 400px); margin: 1rem auto; }
-      .cell { aspect-ratio: 1; font-size: 3rem; background: #33334d; color: #fff;
-              border: none; border-radius: 8px; }
-      .cell:not(:disabled):hover { background: #4a4a73; }
+      button.secondary { background: #c9c9dc; }
       input { font-size: 1.2rem; padding: 0.6rem; border-radius: 8px; border: none;
-        text-align: center; margin: 0.4rem; }
+              text-align: center; margin: 0.4rem; }
       .code { font-size: 4rem; letter-spacing: 0.4rem; font-weight: bold; margin: 0; }
       .qr { border-radius: 8px; }
       ul.seats { list-style: none; padding: 0; font-size: 1.5rem; }
       .warn { color: #ffb347; }
-      .card { display: inline-block; background: #fff; color: #111; border-radius: 6px;
-        padding: 0.4rem 0.5rem; margin: 3px; font-size: 1.3rem; font-weight: bold;
-        min-width: 2.2rem; }
-        .card.red { color: #c62828; }
-        .choices button { margin: 4px; }
-        button.sel { background: #8ab4ff; }
-        .players { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
-        .player { background: #33334d; border-radius: 10px; padding: 0.6rem 1rem; min-width: 150px; }
-        .player.turn { outline: 3px solid #8ab4ff; }
-        ul.log { list-style: none; padding: 0; max-width: 520px; margin: 1rem auto; text-align: left; opacity: 0.9; }
-        .qtext { font-size: 1.6rem; max-width: 760px; margin: 1rem auto; }
-        .options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 760px; margin: 1rem auto; }
-        .opt { background: #33334d; color: #fff; border: 2px solid transparent; border-radius: 10px;
-              padding: 0.9rem; font-size: 1.2rem; text-align: left; }
-        button.opt:not(:disabled):hover { background: #4a4a73; }
-        .opt.right { background: #1b5e20; border-color: #66bb6a; }
-        .opt.wrong { background: #7f1d1d; border-color: #ef5350; }
-        .good { color: #81c784; }
-        .bad { color: #ef9a9a; }
-        ul.scoreboard { list-style: none; padding: 0; max-width: 360px; margin: 1rem auto; }
-        ul.scoreboard li { display: flex; justify-content: space-between; padding: 0.4rem 0.8rem;
-                          background: #33334d; border-radius: 8px; margin: 4px 0; }
-        ul.scoreboard li.turn { outline: 3px solid #8ab4ff; }
-        .credit { font-size: 0.8rem; opacity: 0.7; }
-        @media (max-width: 520px) { .options { grid-template-columns: 1fr; } }
+      .players { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+      .player { background: #33334d; border-radius: 10px; padding: 0.6rem 1rem; min-width: 150px; }
       a { color: #8ab4ff; }
+      .bar { display: flex; justify-content: space-between; align-items: center;
+             height: 44px; padding: 0 0.8rem; background: #14141f; font-size: 0.9rem; }
+      .bar button { font-size: 0.85rem; padding: 0.3rem 0.7rem; }
+      iframe.game { display: block; width: 100%; border: 0; background: #1e1e2f;
+                    height: calc(100vh - 44px); height: calc(100dvh - 44px); }
     </style>
   </head>
   <body>

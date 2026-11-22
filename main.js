@@ -20,6 +20,61 @@ const esc = (s) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
   );
 
+// ---- Remembering seats, so a player can return after closing the tab ----
+// Stored on this device only. Nothing is sent to or kept on the server.
+const STORE_KEY = 'party-sessions';
+const KEEP_FOR = 12 * 60 * 60 * 1000; // forget entries after 12 hours
+
+function loadSessions() {
+  try {
+    const all = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+    const fresh = {};
+    for (const [k, v] of Object.entries(all)) {
+      if (v && Date.now() - v.savedAt < KEEP_FOR) fresh[k] = v;
+    }
+    return fresh;
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveSession(key, data) {
+  try {
+    const all = loadSessions();
+    all[key] = { ...data, savedAt: Date.now() };
+    localStorage.setItem(STORE_KEY, JSON.stringify(all));
+  } catch (e) {
+    /* storage can be blocked; recovery then simply won't work */
+  }
+}
+
+function forgetSession(key) {
+  try {
+    const all = loadSessions();
+    delete all[key];
+    localStorage.setItem(STORE_KEY, JSON.stringify(all));
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+const seatKey = () => `seat:${gameID}:${matchID}`;
+
+// Does this room still exist on the server?
+async function roomExists(game, code) {
+  try {
+    const res = await fetch(`${SERVER}/games/${game}/${encodeURIComponent(code)}`);
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+function rememberSeat(seat, name) {
+  sessionStorage.setItem(`seat-${gameID}-${matchID}`, JSON.stringify(seat)); // this tab
+  saveSession(seatKey(), { game: gameID, match: matchID, name, seat }); // this device
+}
+
 async function api(game, path, body) {
   const res = await fetch(`${SERVER}/games/${game}/${path}`, {
     method: 'POST',
@@ -216,6 +271,7 @@ function home() {
         <button id="join">Join</button>
       </div>
       <p id="err" class="warn"></p>
+      <div id="resume"></div>
     </div>
     ${rows}`;
 
@@ -286,6 +342,46 @@ function home() {
   codeInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') doJoin();
   });
+  showResume();
+}
+
+// Offer to rejoin rooms this device was in, if they still exist
+async function showResume() {
+  const box = document.getElementById('resume');
+  if (!box) return;
+  const items = [];
+  for (const [key, s] of Object.entries(loadSessions())) {
+    const g = s && catalog.find((x) => x.id === s.game);
+    if (!g) continue;
+    if (!(await roomExists(s.game, s.match))) {
+      forgetSession(key);
+      continue;
+    }
+    items.push({ g, s });
+  }
+  if (!items.length) return;
+  box.innerHTML =
+    '<h3>Pick up where you left off</h3>' +
+    items
+      .map(
+        ({ g, s }, i) =>
+          `<button class="resume" data-i="${i}">${
+            s.tv ? 'Resume hosting' : `Rejoin as ${esc(s.name || 'player')} in`
+          } ${esc(g.name)} · Room ${esc(s.match)}</button>`
+      )
+      .join('<br />');
+  box.querySelectorAll('.resume').forEach((b) => {
+    b.onclick = () => {
+      const { s } = items[Number(b.dataset.i)];
+      const base = `?game=${encodeURIComponent(s.game)}&match=${encodeURIComponent(s.match)}`;
+      if (s.tv) {
+        location.search = `${base}&view=tv`;
+      } else {
+        sessionStorage.setItem(`seat-${s.game}-${s.match}`, JSON.stringify(s.seat));
+        location.search = base;
+      }
+    };
+  });
 }
 
 // ---- TV: lobby, then the game's public screen ----
@@ -294,6 +390,7 @@ async function tv() {
   const qr = await QRCode.toDataURL(joinURL, { width: 280, margin: 2 });
   const isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
   const client = connect();
+    saveSession(`tv:${gameID}:${matchID}`, { game: gameID, match: matchID, tv: true });
   let frame = null;
   client.start();
   client.subscribe((state) => {
@@ -336,11 +433,12 @@ function spectate() {
 }
 
 // ---- Phone: join form ----
-function joinForm() {
+function joinForm(notice) {
   app.innerHTML = `
     <div class="page">
       <h1>${esc(entry.name)}</h1>
       <p>Room ${esc(matchID)}</p>
+      ${notice ? `<p class="warn">${esc(notice)}</p>` : ''}
       <input id="nick" placeholder="Your nickname" maxlength="12" />
       <br /><button id="go">Join as player</button>
       <button id="watch" class="secondary">Just watch</button>
@@ -356,13 +454,47 @@ function joinForm() {
         playerName: name,
       });
       const seat = { playerID, credentials: playerCredentials };
-      sessionStorage.setItem(`seat-${gameID}-${matchID}`, JSON.stringify(seat));
+      rememberSeat(seat, name);
       playPhone(seat);
     } catch (e) {
       document.getElementById('err').textContent =
         'Could not join. Check the code, or the room may be full. You can still watch.';
     }
   };
+}
+
+async function phone() {
+  // Same tab (for example a refresh): carry straight on
+  const inTab = JSON.parse(
+    sessionStorage.getItem(`seat-${gameID}-${matchID}`) || 'null'
+  );
+  if (inTab) {
+    if (await roomExists(gameID, matchID)) return playPhone(inTab);
+    sessionStorage.removeItem(`seat-${gameID}-${matchID}`);
+    forgetSession(seatKey());
+    return joinForm('That room has ended. You can join again if the host starts a new one.');
+  }
+
+  // A returning player on this device (the tab was closed): offer to continue
+  const saved = loadSessions()[seatKey()];
+  if (saved && saved.seat && (await roomExists(gameID, matchID))) {
+    app.innerHTML = `
+      <div class="page">
+        <h1>${esc(entry.name)}</h1>
+        <p>Room ${esc(matchID)}</p>
+        <h2>Welcome back, ${esc(saved.name || 'player')}!</h2>
+        <button id="continue">Continue as ${esc(saved.name || 'player')}</button>
+        <br /><button id="other" class="secondary">Join as someone else</button>
+      </div>`;
+    document.getElementById('continue').onclick = () => {
+      sessionStorage.setItem(`seat-${gameID}-${matchID}`, JSON.stringify(saved.seat));
+      playPhone(saved.seat);
+    };
+    document.getElementById('other').onclick = () => joinForm();
+    return;
+  }
+  if (saved) forgetSession(seatKey());
+  joinForm();
 }
 
 // ---- Phone: a seated player. Can flip between "my screen" and the TV view ----
@@ -414,14 +546,6 @@ function playPhone(seat) {
     latest.watcher = state;
     if (showing === 'public') draw();
   });
-}
-
-function phone() {
-  const saved = JSON.parse(
-    sessionStorage.getItem(`seat-${gameID}-${matchID}`) || 'null'
-  );
-  if (saved) playPhone(saved);
-  else joinForm();
 }
 
 function notFound() {

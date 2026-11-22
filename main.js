@@ -185,8 +185,8 @@ function createFrame(onMove) {
   };
 }
 
-function buildShell(onMove, extraHTML) {
-  app.innerHTML = `<div class="bar"><span>${esc(entry.name)} · Room ${esc(matchID)}</span><span id="bar-extra">${extraHTML || ''}</span></div>`;
+function buildShell(onMove, extraHTML, who) {
+  app.innerHTML = `<div class="bar"><span>${who ? `<strong>${esc(who)}</strong> · ` : ''}${esc(entry.name)} · Room ${esc(matchID)}</span><span id="bar-extra">${extraHTML || ''}</span></div>`;
   const frame = createFrame(onMove);
   app.appendChild(frame.iframe);
   return frame;
@@ -231,7 +231,7 @@ function detailHTML(g) {
 function home() {
   if (catalog.length === 0) {
     app.innerHTML =
-      '<div class="page"><h1>Party Games</h1><p>No games are installed yet.</p></div>';
+      '<div class="page"><h1 class="banner-title"><img class="banner" src="/banner.jpg" alt="Party Games" /></h1><p>No games are installed yet.</p></div>';
     return;
   }
 
@@ -263,8 +263,8 @@ function home() {
     .join('');
 
   app.innerHTML = `
-    <div class="hero">
-      <h1>Party Games</h1>
+        <div class="hero">
+      <h1 class="banner-title"><img class="banner" src="/banner.jpg" alt="Party Games" /></h1>
       <p>Pick a game on the big screen. Join with a room code on your phone.</p>
       <div class="joinbar">
         <input id="code" placeholder="ROOM CODE" maxlength="4" autocapitalize="characters" />
@@ -518,7 +518,8 @@ function playPhone(seat) {
           const fn = player.moves[name];
           if (typeof fn === 'function') fn(...args);
         },
-        '<button id="flip">📺 TV view</button>'
+        '<button id="flip">📺 TV view</button>',
+        namesOf(player)[seat.playerID]
       );
       document.getElementById('flip').onclick = () => {
         showing = showing === 'player' ? 'public' : 'player';

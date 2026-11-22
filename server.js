@@ -8,6 +8,7 @@ import boardgameServer from 'boardgame.io/dist/cjs/server.js';
 const { Server, Origins } = boardgameServer;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const gamesDir = path.join(here, 'games');
+fs.mkdirSync(gamesDir, { recursive: true });
 
 // ---- Discover games: every folder with a game.json and a server.js ----
 const loaded = [];

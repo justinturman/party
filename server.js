@@ -40,6 +40,10 @@ const publicCatalog = loaded.map(({ manifest, game }) => ({
   minPlayers: game.minPlayers,
   maxPlayers: game.maxPlayers,
   moves: Object.keys(game.moves || {}),
+  thumbnail: /^[\w.-]+$/.test(manifest.thumbnail || '')
+    ? `/g/${manifest.id}/${manifest.thumbnail}`
+    : null,
+  color: /^#[0-9a-fA-F]{3,8}$/.test(manifest.color || '') ? manifest.color : '#33334d',
 }));
 
 // Each game's public/ folder is served at /g/<id>/

@@ -61,6 +61,7 @@ const connect = (extra = {}) =>
     game: stubGame(),
     matchID,
     multiplayer: SocketIO({ server: SERVER }),
+    debug: params.get('debug') === '1', // hidden unless you add ?debug=1 to the address
     ...extra,
   });
 
@@ -137,48 +138,154 @@ function buildShell(onMove, extraHTML) {
 }
 
 // ---- Home: pick a game to host, or join with a code ----
+// ---- Home: a catalog of games in rows by category, plus join-by-code ----
+function safeColor(c) {
+  return /^#[0-9a-fA-F]{3,8}$/.test(c || '') ? c : '#33334d';
+}
+
+function thumbHTML(g) {
+  const img = g.thumbnail ? `<img src="${esc(SERVER + g.thumbnail)}" alt="" />` : '';
+  return `${img}<span class="initial">${esc(g.name.charAt(0))}</span>`;
+}
+
+function playersText(g) {
+  return g.minPlayers === g.maxPlayers
+    ? `${g.minPlayers} players`
+    : `${g.minPlayers}–${g.maxPlayers} players`;
+}
+
+function detailHTML(g) {
+  let buttons = '';
+  for (let n = g.minPlayers; n <= g.maxPlayers; n++) {
+    const label = g.minPlayers === g.maxPlayers ? 'Start' : `${n} players`;
+    buttons += `<button data-start="${esc(g.id)}" data-n="${n}">${label}</button> `;
+  }
+  return `<div class="detail-inner">
+    <div class="detail-art" style="--accent:${safeColor(g.color)}">${g.thumbnail ? `<img src="${esc(SERVER + g.thumbnail)}" alt="" />` : ''}</div>
+    <div class="detail-text">
+      <button class="close" aria-label="Close">✕</button>
+      <h3>${esc(g.name)}</h3>
+      <p class="meta">${esc(g.category)} · ${playersText(g)}</p>
+      <p>${esc(g.summary || g.description)}</p>
+      <p><strong>Host this game on the big screen:</strong></p>
+      ${buttons}
+    </div>
+  </div>`;
+}
+
 function home() {
   if (catalog.length === 0) {
-    app.innerHTML = '<div class="page"><h1>Party Games</h1><p>No games are installed yet.</p></div>';
+    app.innerHTML =
+      '<div class="page"><h1>Party Games</h1><p>No games are installed yet.</p></div>';
     return;
   }
-  const cards = catalog
-    .map((g) => {
-      let buttons = '';
-      for (let n = g.minPlayers; n <= g.maxPlayers; n++) {
-        const label = g.minPlayers === g.maxPlayers ? 'Start' : `${n} players`;
-        buttons += `<button data-start="${esc(g.id)}" data-n="${n}">${label}</button> `;
-      }
-      return `<div class="player"><h3>${esc(g.name)}</h3><p>${esc(g.description)}</p>${buttons}</div>`;
-    })
+
+  // Group the games by category, categories in alphabetical order
+  const groups = {};
+  for (const g of catalog) {
+    if (!groups[g.category]) groups[g.category] = [];
+    groups[g.category].push(g);
+  }
+  const rows = Object.keys(groups)
+    .sort()
+    .map(
+      (cat) => `
+      <section class="row">
+        <h2>${esc(cat)}</h2>
+        <div class="strip">
+          ${groups[cat]
+            .map(
+              (g) => `<button class="tile" data-id="${esc(g.id)}" style="--accent:${safeColor(g.color)}">
+                <div class="thumb">${thumbHTML(g)}</div>
+                <span class="tile-name">${esc(g.name)}</span>
+              </button>`
+            )
+            .join('')}
+        </div>
+        <div class="detail" hidden></div>
+      </section>`
+    )
     .join('');
+
   app.innerHTML = `
-    <div class="page">
+    <div class="hero">
       <h1>Party Games</h1>
-      <h2>Host a game</h2>
-      <p>Do this on the big screen.</p>
-      <div class="players">${cards}</div>
-      <h2>Join a game</h2>
-      <p>Do this on your phone.</p>
-      <input id="code" placeholder="ROOM CODE" maxlength="4" autocapitalize="characters" />
-      <br /><button id="join">Join</button>
+      <p>Pick a game on the big screen. Join with a room code on your phone.</p>
+      <div class="joinbar">
+        <input id="code" placeholder="ROOM CODE" maxlength="4" autocapitalize="characters" />
+        <button id="join">Join</button>
+      </div>
       <p id="err" class="warn"></p>
-    </div>`;
-  app.querySelectorAll('[data-start]').forEach((b) => {
-    b.onclick = async () => {
-      const { matchID: newID } = await api(b.dataset.start, 'create', {
-        numPlayers: Number(b.dataset.n),
+    </div>
+    ${rows}`;
+
+  // If a thumbnail fails to load, the coloured tile with the initial shows instead
+  app.querySelectorAll('.thumb img, .detail-art img').forEach((img) =>
+    img.addEventListener('error', () => img.remove())
+  );
+
+  // Click a tile to expand its details; click it again (or the X) to close
+  let openID = null;
+  const closeAll = () => {
+    app.querySelectorAll('.detail').forEach((d) => {
+      d.hidden = true;
+      d.innerHTML = '';
+    });
+    app.querySelectorAll('.tile.open').forEach((t) => t.classList.remove('open'));
+  };
+  app.querySelectorAll('.tile').forEach((tile) => {
+    tile.onclick = () => {
+      const id = tile.dataset.id;
+      const wasOpen = openID === id;
+      closeAll();
+      if (wasOpen) {
+        openID = null;
+        return;
+      }
+      openID = id;
+      const g = catalog.find((x) => x.id === id);
+      const detail = tile.closest('.row').querySelector('.detail');
+      detail.innerHTML = detailHTML(g);
+      detail.hidden = false;
+      tile.classList.add('open');
+      detail.querySelectorAll('img').forEach((img) =>
+        img.addEventListener('error', () => img.remove())
+      );
+      detail.querySelector('.close').onclick = () => {
+        closeAll();
+        openID = null;
+      };
+      detail.querySelectorAll('[data-start]').forEach((b) => {
+        b.onclick = async () => {
+          b.disabled = true;
+          try {
+            const { matchID: newID } = await api(b.dataset.start, 'create', {
+              numPlayers: Number(b.dataset.n),
+            });
+            location.search = `?game=${b.dataset.start}&match=${newID}&view=tv`;
+          } catch (e) {
+            b.disabled = false;
+            document.getElementById('err').textContent = 'Could not start the game. Try again.';
+          }
+        };
       });
-      location.search = `?game=${b.dataset.start}&match=${newID}&view=tv`;
+      detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     };
   });
-  document.getElementById('join').onclick = async () => {
-    const code = document.getElementById('code').value.trim().toUpperCase();
+
+  // Join by room code
+  const codeInput = document.getElementById('code');
+  const doJoin = async () => {
+    const code = codeInput.value.trim().toUpperCase();
     if (!code) return;
     const found = await findGame(code);
     if (found) location.search = `?game=${found}&match=${encodeURIComponent(code)}`;
     else document.getElementById('err').textContent = 'No room with that code.';
   };
+  document.getElementById('join').onclick = doJoin;
+  codeInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doJoin();
+  });
 }
 
 // ---- TV: lobby, then the game's public screen ----

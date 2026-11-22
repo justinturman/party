@@ -1,20 +1,23 @@
+import { takeQuestions, startQuestionBank } from './bank.js';
 const INVALID_MOVE = 'INVALID_MOVE';
 
 const QUESTIONS_PER_PLAYER = 3;
 const POINTS = { easy: 1, medium: 2, hard: 3 };
 
-// The server plugs a question supplier in here (see server.js).
-// Browsers never get one, so the answers can't be read there.
-export const triviaSource = { take: null };
+// Where questions come from. Tests can swap this out.
+export const source = { take: takeQuestions };
 
-export const Trivia = {
+// Called once by the platform when the server starts
+export const init = startQuestionBank;
+
+export const game = {
   name: 'trivia',
   minPlayers: 2,
   maxPlayers: 6,
 
   setup: ({ ctx, random }) => {
     const total = ctx.numPlayers * QUESTIONS_PER_PLAYER;
-    const raw = triviaSource.take ? triviaSource.take(total) : [];
+    const raw = source.take(total);
     const questions = raw.map((q) => {
       const options = random.Shuffle([q.answer, ...q.wrong]);
       return {

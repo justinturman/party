@@ -1,4 +1,4 @@
-import { Trivia, triviaSource } from './games/trivia/game.js';
+import { game as Trivia, source as triviaSource } from './games/trivia/server.js';
 
 const shuffle = (a) => [...a].sort(() => Math.random() - 0.5);
 

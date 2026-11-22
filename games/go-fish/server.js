@@ -51,7 +51,7 @@ function nextPlayer(G, ctx, current) {
   return current;
 }
 
-export const GoFish = {
+export const game = {
   name: 'go-fish',
   minPlayers: 2,
   maxPlayers: 6,

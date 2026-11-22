@@ -1,0 +1,7 @@
+{
+  "id": "go-fish",
+  "name": "Go Fish",
+  "category": "Card Games",
+  "description": "Collect sets of four by asking other players for cards.",
+  "summary": "Ask another player for a card rank you hold. If they have it, they hand it over and you go again. If not, 'Go Fish!' and draw from the pond. Four of a kind makes a book, and whoever collects the most books wins. Your hand stays on your phone, and the TV shows only card counts and books."
+}

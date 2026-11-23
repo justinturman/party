@@ -59,6 +59,10 @@
                     height: calc(100vh - 44px); height: calc(100dvh - 44px); }
       .bar span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis;
                         white-space: nowrap; margin-right: 0.6rem; }
+      #joinpanel { position: fixed; inset: 44px 0 0 0; z-index: 5; overflow: auto;
+             background: rgba(20, 20, 31, 0.97); display: flex;
+             align-items: center; justify-content: center; }
+      #joinpanel[hidden] { display: none; }
     </style>
   </head>
   <body>

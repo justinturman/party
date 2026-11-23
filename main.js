@@ -128,19 +128,30 @@ function namesOf(client) {
   return names;
 }
 
-function seatsHTML(client) {
-  return (
-    '<ul class="seats">' +
-    (client.matchData || [])
-      .map((p) => `<li>${p.name ? esc(p.name) : '<em>waiting…</em>'}</li>`)
-      .join('') +
-    '</ul>'
-  );
+// Who has joined, and who is still connected (games like Find It list these)
+function rosterOf(client) {
+  return (client.matchData || [])
+    .filter((p) => p.name)
+    .map((p) => ({ id: String(p.id), name: p.name, connected: p.isConnected !== false }));
 }
 
-function allJoined(client) {
+function seatsHTML(client) {
   const seats = client.matchData || [];
-  return seats.length > 0 && seats.every((p) => p.name);
+  if (entry && entry.openJoin) {
+    const joined = seats.filter((p) => p.name);
+    return (
+      '<ul class="seats">' +
+      (joined.length
+        ? joined.map((p) => `<li>${esc(p.name)}</li>`).join('')
+        : '<li><em>Waiting for the first player…</em></li>') +
+      '</ul>'
+    );
+  }
+  return (
+    '<ul class="seats">' +
+    seats.map((p) => `<li>${p.name ? esc(p.name) : '<em>waiting…</em>'}</li>`).join('') +
+    '</ul>'
+  );
 }
 
 // The message the game's screen receives
@@ -152,9 +163,26 @@ function stateMessage(viewName, playerID, client, state) {
       playerID,
       room: matchID,
       names: namesOf(client),
+      players: rosterOf(client),
       state: { G: state.G, ctx: state.ctx },
     })
   );
+}
+
+// A panel on the TV with the room code and QR code, so people can join mid-game
+function addJoinPanel(joinURL, qr) {
+  const panel = document.createElement('div');
+  panel.id = 'joinpanel';
+  panel.hidden = true;
+  panel.innerHTML = `<div class="joincard">
+      <p>Go to this site on your phone and enter the code, or scan:</p>
+      <p class="code">${esc(matchID)}</p>
+      <img class="qr" src="${qr}" alt="QR code to join" />
+      <p>${esc(joinURL)}</p>
+      <button id="joinclose">Close</button></div>`;
+  app.appendChild(panel);
+  document.getElementById('joinbtn').onclick = () => { panel.hidden = false; };
+  document.getElementById('joinclose').onclick = () => { panel.hidden = true; };
 }
 
 // The sandboxed iframe that shows the game's own screens
@@ -204,6 +232,7 @@ function thumbHTML(g) {
 }
 
 function playersText(g) {
+  if (g.openJoin) return 'Players can join any time';
   return g.minPlayers === g.maxPlayers
     ? `${g.minPlayers} players`
     : `${g.minPlayers}–${g.maxPlayers} players`;
@@ -411,7 +440,13 @@ async function tv() {
         </div>`;
       return;
     }
-    if (!frame) frame = buildShell(() => {}, '<a href="/">New game</a>');
+    if (!frame) {
+      frame = buildShell(
+        () => {},
+        (entry.openJoin ? '<button id="joinbtn">➕ Join</button> ' : '') + '<a href="/">New game</a>'
+      );
+      if (entry.openJoin) addJoinPanel(joinURL, qr);
+    }
     frame.send(stateMessage('public', null, client, state));
   });
 }
@@ -461,6 +496,12 @@ function joinForm(notice) {
         'Could not join. Check the code, or the room may be full. You can still watch.';
     }
   };
+}
+
+function allJoined(client) {
+  const seats = client.matchData || [];
+  if (entry && entry.openJoin) return seats.some((p) => p.name); // open games start with the first player
+  return seats.length > 0 && seats.every((p) => p.name);
 }
 
 async function phone() {

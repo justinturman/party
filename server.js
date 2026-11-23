@@ -45,6 +45,7 @@ const publicCatalog = loaded.map(({ manifest, game }) => ({
     ? `/g/${manifest.id}/${manifest.thumbnail}`
     : null,
   color: /^#[0-9a-fA-F]{3,8}$/.test(manifest.color || '') ? manifest.color : '#33334d',
+  openJoin: manifest.openJoin === true,
 }));
 
 // Each game's public/ folder is served at /g/<id>/

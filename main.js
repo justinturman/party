@@ -202,6 +202,8 @@ function createFrame(onMove) {
       if (pending) post(pending);
     } else if (d.type === 'move' && typeof d.name === 'string') {
       onMove(d.name, Array.isArray(d.args) ? d.args : []);
+    } else if (d.type === 'leave') {
+      location.href = '/'; // a game's "Leave" button takes the player back to the catalog
     }
   });
   return {

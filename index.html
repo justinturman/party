@@ -18,22 +18,61 @@
       .warn { color: #ffb347; }
       .players { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
       .player { background: #33334d; border-radius: 10px; padding: 0.6rem 1rem; min-width: 150px; }
-      .hero { padding: 1.2rem 1rem 0.6rem; }
-      .hero h1 { margin: 0; font-size: 2.2rem; }
+      .hero h1 { margin: 0; font-size: 2.2rem; background-color:#012; }
       .hero p { margin: 0.3rem 0 0.8rem; opacity: 0.8; }
       .banner-title { margin: 0; }
       .banner { display: block; width: 100%; max-width: 1024px; height: auto;
-          margin: 0 auto 0.6rem; border-radius: 12px; }
+          margin: 0 auto 0; }
+      #joinroombox{
+        background-color:#111;
+        padding:20px;
+      }
       .joinbar { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px; }
       .joinbar input { width: 9rem; margin: 0; }
       .row { text-align: left; padding: 0 1rem; margin: 1.4rem 0; }
       .row h2 { margin: 0 0 0.5rem; font-size: 1.3rem; }
-      .strip { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity; }
-      .tile { flex: 0 0 auto; width: 220px; padding: 0; border: 2px solid transparent; border-radius: 10px;
+      .carousel { position: relative; }
+      .strip { display: flex; gap: 14px; overflow-x: auto; padding: 10px 6px 16px; scroll-snap-type: x proximity;
+              scroll-padding: 0 6px; overscroll-behavior-x: contain; cursor: grab;
+              scrollbar-width: none; -ms-overflow-style: none; }
+      .strip::-webkit-scrollbar { display: none; }
+      .strip.dragging { scroll-snap-type: none; cursor: grabbing; user-select: none; }
+      .strip img { -webkit-user-drag: none; user-select: none; }
+
+      /* Soft fades at the edges that have more to scroll to */
+      .carousel::before, .carousel::after { content: ''; position: absolute; top: 0; bottom: 0; width: 70px; z-index: 1;
+              pointer-events: none; opacity: 0; transition: opacity 0.25s; }
+      .carousel::before { left: 0; background: linear-gradient(to right, #1e1e2f, rgba(30, 30, 47, 0)); }
+      .carousel::after { right: 0; background: linear-gradient(to left, #1e1e2f, rgba(30, 30, 47, 0)); }
+      .carousel.can-left::before, .carousel.can-right::after { opacity: 1; }
+
+      /* The arrows appear only when there is more to scroll to in that direction */
+      .arrow { position: absolute; top: 70px; z-index: 2; width: 46px; height: 46px; padding: 0;
+              display: flex; align-items: center; justify-content: center; color: #fff;
+              background: rgba(20, 20, 31, 0.78); border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 50%;
+              box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+              cursor: pointer; transform: translateY(-50%); opacity: 0; visibility: hidden;
+              transition: opacity 0.2s, visibility 0s 0.2s, transform 0.15s, background 0.15s, color 0.15s; }
+      .arrow.left { left: 4px; }
+      .arrow.right { right: 4px; }
+      .carousel.can-left .arrow.left, .carousel.can-right .arrow.right { opacity: 1; visibility: visible; transition-delay: 0s; }
+      .arrow:hover { background: #8ab4ff; color: #111; transform: translateY(-50%) scale(1.1); }
+      .arrow:active { transform: translateY(-50%) scale(0.94); }
+      .arrow:focus-visible { outline: 3px solid #8ab4ff; outline-offset: 2px; }
+      @media (hover: none) { .arrow { width: 40px; height: 40px; } }
+
+      /* The tiles */
+      .tile { flex: 0 0 auto; width: 220px; padding: 0; border: 2px solid transparent; border-radius: 12px;
               background: #2a2a40; color: #fff; text-align: left; overflow: hidden; cursor: pointer;
-              scroll-snap-align: start; transition: transform 0.15s, border-color 0.15s; }
-      .tile:hover, .tile:focus-visible { transform: scale(1.04); border-color: #8ab4ff; outline: none; }
+              scroll-snap-align: start; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+              transition: transform 0.18s ease, border-color 0.18s, box-shadow 0.18s; }
+      .tile:hover, .tile:focus-visible { transform: translateY(-4px) scale(1.03); border-color: #8ab4ff;
+              box-shadow: 0 12px 24px rgba(0, 0, 0, 0.5); outline: none; }
       .tile.open { border-color: #8ab4ff; }
+      @media (prefers-reduced-motion: reduce) {
+        .tile, .arrow { transition: none; }
+        .tile:hover, .tile:focus-visible { transform: none; }
+      }
       .thumb { position: relative; aspect-ratio: 16 / 9; background: var(--accent); display: flex;
               align-items: center; justify-content: center; }
       .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -47,9 +86,22 @@
       .detail-text { flex: 2 1 320px; padding: 1rem 1.2rem; position: relative; }
       .detail-text h3 { margin: 0 0 0.2rem; font-size: 1.6rem; }
       .detail-text .meta { opacity: 0.7; margin: 0 0 0.8rem; }
-      .detail-text button { margin: 3px; }
-      .detail .close { position: absolute; top: 6px; right: 8px; font-size: 1.2rem; padding: 0.1rem 0.6rem;
-                      background: transparent; color: #fff; border: none; }
+      .detail-text button { margin: 3px; cursor:pointer; }
+      .detail .close { position: absolute; top: 6px; right: 8px; font-size: 1.2rem; padding: 0.2rem 0.6rem;
+                      background: transparent; color: #fff; border: none; cursor:pointer; }
+      .detail .close:hover{
+        background-color:#555;
+      }
+      .detail button[data-start]:hover{
+        background-color:#aaa;
+      }
+      #resume { background-color:#333; padding:20px; }
+      #resume:empty { display: none; }
+      .suggest { margin: 1rem 0 0; }
+      .suggest p { margin: 0 0 0.3rem; opacity: 0.75; font-size: 0.95rem; }
+      .suggest button { margin: 4px; font-size: 1.05rem; background: #3d3d63; color: #fff; border: none;
+                        border-radius: 999px; padding: 0.5rem 1rem; cursor: pointer; }
+      .suggest button:hover:not(:disabled), .suggest button:focus-visible { background: #8ab4ff; color: #111; outline: none; }
       .resume { margin: 4px; background: #8ab4ff; }
       a { color: #8ab4ff; }
       .bar { display: flex; justify-content: space-between; align-items: center;
@@ -63,6 +115,63 @@
              background: rgba(20, 20, 31, 0.97); display: flex;
              align-items: center; justify-content: center; }
       #joinpanel[hidden] { display: none; }
+      #bar-extra { display: inline-flex; align-items: center; gap: 0.5rem; flex: none; white-space: nowrap; }
+      .bar .menubtn { padding: 0.2rem 0.45rem; background: transparent; color: #fff; line-height: 0;
+                      border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 8px; cursor: pointer; }
+      .menubtn svg { display: block; }
+      #pmenuback { position: fixed; inset: 0; z-index: 19; background: transparent; }
+      #pmenu { position: fixed; top: 48px; right: 8px; z-index: 20; min-width: 11rem; padding: 6px;
+              background: #2a2a40; border: 1px solid #4a4a73; border-radius: 12px;
+              box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5); }
+      #pmenu button { display: block; width: 100%; text-align: left; padding: 0.7rem 0.8rem; font-size: 1.05rem;
+                      background: transparent; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+      #pmenu button:hover, #pmenu button:focus-visible { background: #3d3d63; outline: none; }
+      #pmenu[hidden], #pmenuback[hidden] { display: none; }
+      .poverlay { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
+                  background: #1e1e2f; color: #fff; }
+      .ov-head { display: flex; align-items: center; justify-content: space-between; flex: none; height: 52px;
+                padding: 0 0.8rem; background: #14141f; border-bottom: 1px solid #33334d; }
+      .ov-head h2 { margin: 0; font-size: 1.3rem; }
+      .ov-close { width: 2.4rem; height: 2.4rem; padding: 0; font-size: 1.3rem; background: transparent; color: #fff;
+                  border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 8px; cursor: pointer; }
+      .ov-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 1rem; }
+      .ov-body.flush { padding: 0; overflow: hidden; }
+      .ov-wrap { max-width: 640px; margin: 0 auto; text-align: left; }
+      .ov-wrap .qr { max-width: 100%; height: auto; }
+      .ov-text { white-space: pre-wrap; line-height: 1.5; font-size: 1.05rem; }
+      .ov-sub { margin: 0 0 0.8rem; opacity: 0.7; }
+      .ov-muted { opacity: 0.75; }
+      .ov-about { display: block; width: 100%; height: 100%; border: 0; background: #1e1e2f; }
+      .footer { margin: 1.5rem 0 0 0; font-size: 0.9rem; opacity: 0.7; background-color:#000; padding:20px; }
+      /* 1. Modern Standard CSS (Chrome 121+, Edge 121+, Firefox) */
+@supports (scrollbar-color: auto) {
+  .scroll-container {
+    scrollbar-width: thin;
+    /* First color is the thumb (handle), second is the track (background) */
+    scrollbar-color: #555555 #000000;
+  }
+}
+
+/* 2. WebKit Fallback (Safari & older Chromium browsers) */
+@supports selector(::-webkit-scrollbar) {
+  .scroll-container::-webkit-scrollbar {
+    width: 6px;  /* Width for vertical scrollbars */
+    height: 6px; /* Height for horizontal scrollbars */
+  }
+
+  .scroll-container::-webkit-scrollbar-track {
+    background: #000000; /* Black background */
+  }
+
+  .scroll-container::-webkit-scrollbar-thumb {
+    background-color: #555555; /* Dark gray handle */
+    border-radius: 3px;        /* Rounded corners */
+  }
+
+  .scroll-container::-webkit-scrollbar-thumb:hover {
+    background-color: #888888; /* Lighter gray on hover */
+  }
+}
     </style>
   </head>
   <body>

@@ -8,6 +8,7 @@ import boardgameServer from 'boardgame.io/dist/cjs/server.js';
 const { Server, Origins } = boardgameServer;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const gamesDir = path.join(here, 'games');
+const indexFile = path.join(here, 'dist', 'index.html');
 fs.mkdirSync(gamesDir, { recursive: true });
 
 // ---- Discover games: every folder with a game.json and a server.js ----
@@ -46,6 +47,10 @@ const publicCatalog = loaded.map(({ manifest, game }) => ({
     : null,
   color: /^#[0-9a-fA-F]{3,8}$/.test(manifest.color || '') ? manifest.color : '#33334d',
   openJoin: manifest.openJoin === true,
+  // How many players must be present for a game to run. Optional in game.json; when a game
+  // does not say, the minimum is 1 (so an empty room always goes back to the join screen).
+  minJoined: Math.max(1, Math.floor(Number(manifest.minJoined)) || 1),
+  help: typeof manifest.help === 'string' ? manifest.help.slice(0, 4000) : '',
 }));
 
 // Each game's public/ folder is served at /g/<id>/
@@ -54,8 +59,15 @@ for (const g of loaded) gameFiles[g.manifest.id] = serve(path.join(g.dir, 'publi
 
 // Room codes: 4 letters, skipping I and O (they look like 1 and 0)
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-const roomCode = () =>
-  Array.from({ length: 4 }, () => LETTERS[crypto.randomInt(LETTERS.length)]).join('');
+const issued = new Set(); // codes in use, so two rooms can never share one
+const roomCode = () => {
+  let code;
+  do {
+    code = Array.from({ length: 4 }, () => LETTERS[crypto.randomInt(LETTERS.length)]).join('');
+  } while (issued.has(code));
+  issued.add(code);
+  return code;
+};
 
 // Pages opened from home-network addresses (phones on Wi-Fi), any port
 const LAN =
@@ -78,6 +90,81 @@ server.run(PORT, () => {
     if (ctx.path === '/catalog.json') {
       ctx.set('Access-Control-Allow-Origin', '*');
       ctx.body = publicCatalog;
+      return;
+    }
+        // A player gives up their seat: POST /vacate/ABCD  {"playerID":"0","credentials":"..."}
+    // The seat becomes free, but the room stays (boardgame.io's own "leave" deletes the room
+    // when its last player leaves, which would strand the TV).
+    const vacate = ctx.path.match(/^\/vacate\/([A-Za-z]{4})$/);
+    if (vacate && ctx.method === 'POST') {
+      ctx.set('Access-Control-Allow-Origin', '*');
+      const code = vacate[1].toUpperCase();
+      let body = {};
+      try {
+        let raw = '';
+        for await (const chunk of ctx.req) {
+          raw += chunk;
+          if (raw.length > 2000) break;
+        }
+        body = JSON.parse(raw);
+      } catch (e) {
+        body = {};
+      }
+      let metadata = null;
+      try {
+        ({ metadata } = await server.db.fetch(code, { metadata: true }));
+      } catch (e) {
+        metadata = null;
+      }
+      const seat = metadata && metadata.players && metadata.players[body.playerID];
+      if (!seat || typeof body.credentials !== 'string' || seat.credentials !== body.credentials) {
+        ctx.status = 403;
+        ctx.body = { error: 'Not your seat' };
+        return;
+      }
+      delete seat.name;
+      delete seat.credentials;
+      await server.db.setMetadata(code, metadata);
+      ctx.body = {};
+      return;
+    }
+    // The TV has left the game: POST /close/ABCD deletes the room. Phones notice it is gone
+    // and go back to the home screen.
+    const closing = ctx.path.match(/^\/close\/([A-Za-z]{4})$/);
+    if (closing && ctx.method === 'POST') {
+      ctx.set('Access-Control-Allow-Origin', '*');
+      const code = closing[1].toUpperCase();
+      try {
+        await server.db.wipe(code);
+        issued.delete(code);
+      } catch (e) {
+        /* already gone */
+      }
+      ctx.body = {};
+      return;
+    }
+    // Which game does a room code belong to?   GET /room/ABCD  ->  { "game": "find-it" }
+    const room = ctx.path.match(/^\/room\/([A-Za-z]{4})$/);
+    if (room) {
+      ctx.set('Access-Control-Allow-Origin', '*');
+      let metadata = null;
+      try {
+        ({ metadata } = await server.db.fetch(room[1].toUpperCase(), { metadata: true }));
+      } catch (e) {
+        metadata = null;
+      }
+      if (!metadata || !metadata.gameName) {
+        ctx.status = 404;
+        ctx.body = { error: 'No such room' };
+        return;
+      }
+      ctx.body = { game: metadata.gameName };
+      return;
+    }
+    // Room links look like /ABCD. Hand back the app's start page; it works out the rest.
+    if (/^\/[A-Za-z]{4}\/?$/.test(ctx.path) && fs.existsSync(indexFile)) {
+      ctx.type = 'html';
+      ctx.body = fs.createReadStream(indexFile);
       return;
     }
     // A game's own screens
@@ -104,7 +191,10 @@ setInterval(async () => {
     const old = await server.db.listMatches({
       where: { updatedBefore: Date.now() - MAX_AGE },
     });
-    for (const id of old) await server.db.wipe(id);
+    for (const id of old) {
+      await server.db.wipe(id);
+      issued.delete(id);
+    }
     if (old.length) console.log(`Cleaned up ${old.length} old rooms`);
   } catch (e) {
     console.log('Cleanup skipped:', e.message);

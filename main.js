@@ -106,6 +106,28 @@ function setRole(code, role) {
   }
 }
 
+// ---- Host key: proves this TV created the room, so only it can close the room ----
+// Made in the browser (getRandomValues also works on plain http://192.168.x.x addresses,
+// where crypto.randomUUID does not). Kept per tab, and also in the saved TV session so
+// "Resume hosting" in a new tab keeps the right to close the room.
+const hostKeyName = (code) => `party-host-${code}`;
+function newHostKey() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+function getHostKey(code) {
+  try {
+    return (
+      sessionStorage.getItem(hostKeyName(code)) ||
+      (loadSessions()[`tv:${gameID}:${code}`] || {}).hostKey ||
+      ''
+    );
+  } catch (e) {
+    return '';
+  }
+}
+
 // Which game does this room code belong to? Returns the game's id, or null if there is no such room.
 async function roomGame(code) {
   const res = await fetch(`${SERVER}/room/${encodeURIComponent(code)}`);
@@ -214,6 +236,8 @@ let leaving = false;
 async function goHome() {
   if (leaving) return;
   leaving = true;
+  // Give a game's own "leave" move a moment to reach the server first
+  await new Promise((resolve) => setTimeout(resolve, 300));
   if (currentSeat && entry && entry.openJoin) {
     const seat = currentSeat;
     currentSeat = null;
@@ -257,17 +281,42 @@ function roomClosed() {
   location.href = '/';
 }
 
+// This phone's seat was given up by the server (it was offline for too long): offer a fresh join.
+const SEAT_NOTICE = 'Your seat was given up while you were away. You can join again.';
+function seatLost() {
+  if (leaving) return;
+  leaving = true;
+  try {
+    sessionStorage.removeItem(`seat-${gameID}-${matchID}`);
+    sessionStorage.setItem('party-seat-notice', SEAT_NOTICE);
+  } catch (e) {
+    /* ignore */
+  }
+  forgetSession(seatKey());
+  location.reload();
+}
+function takeSeatNotice() {
+  try {
+    const n = sessionStorage.getItem('party-seat-notice');
+    sessionStorage.removeItem('party-seat-notice');
+    return n || undefined;
+  } catch (e) {
+    return undefined;
+  }
+}
+
 // The TV leaves ("New game"): the room is deleted, which sends every player home too.
 async function endGame() {
   if (leaving) return;
   leaving = true;
+  const hostKey = getHostKey(matchID); // read before the saved session is forgotten
   forgetSession(`tv:${gameID}:${matchID}`);
   try {
     await Promise.race([
       fetch(`${SERVER}/close/${matchID}`, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
-        body: '{}',
+        body: JSON.stringify({ hostKey }),
         keepalive: true,
       }),
       new Promise((resolve) => setTimeout(resolve, 1500)),
@@ -281,21 +330,29 @@ document.addEventListener('click', (e) => {
   const a = e.target.closest && e.target.closest('.newgame');
   if (!a) return;
   e.preventDefault();
+  if (!confirm('End this game for everyone and go back to the game list?')) return;
   endGame();
 });
 
 // The server does not announce it when a seat is freed (or the room is closed), so the
 // screens also ask about the room every few seconds and redraw when the seat list changed.
-function watchSeats(client, redraw) {
-  const names = (list) => JSON.stringify((list || []).map((p) => [p.id, p.name || '']));
+function watchSeats(clients, redraw, onSeats) {
+  // One poll serves every client of this screen (a phone has a player and a TV-view client)
+  const list = Array.isArray(clients) ? clients : [clients];
+  const names = (players) => JSON.stringify((players || []).map((p) => [p.id, p.name || '']));
   setInterval(async () => {
     try {
       const res = await fetch(`${SERVER}/games/${gameID}/${matchID}`);
       if (res.status === 404) return roomClosed(); // the TV left, so the room is gone
       if (!res.ok || !entry.openJoin) return;
       const m = await res.json();
-      if (!Array.isArray(m.players) || names(m.players) === names(client.matchData)) return;
-      client.matchData = m.players;
+      if (!Array.isArray(m.players)) return;
+      if (onSeats) onSeats(m.players);
+      const fresh = names(m.players);
+      if (list.every((c) => names(c.matchData) === fresh)) return;
+      list.forEach((c) => {
+        c.matchData = m.players;
+      });
       redraw();
     } catch (e) {
       /* try again next time */
@@ -489,7 +546,7 @@ function showHelp() {
 }
 
 function showJoin() {
-  const joinURL = `${location.origin}/?game=${encodeURIComponent(gameID)}&match=${encodeURIComponent(matchID)}`;
+  const joinURL = `${location.origin}/${matchID}`;
   const isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
   openOverlay('Join', (body) => {
     const paint = (qr) => {
@@ -773,6 +830,15 @@ function home() {
             const { matchID: newID } = await api(b.dataset.start, 'create', {
               numPlayers: Number(b.dataset.n),
             });
+            // Claim the room: the key is what later lets this TV (and only this TV) close it
+            const hostKey = newHostKey();
+            const claim = await fetch(`${SERVER}/host/${newID}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain' },
+              body: JSON.stringify({ hostKey }),
+            });
+            if (!claim.ok) throw new Error('claim');
+            sessionStorage.setItem(hostKeyName(newID), hostKey);
             setRole(newID, 'tv'); // this tab is the big screen
             location.href = `/${newID}`;
           } catch (e) {
@@ -844,6 +910,7 @@ async function showResume() {
       const { s } = items[Number(b.dataset.i)];
       if (s.tv) {
         setRole(s.match, 'tv');
+        if (s.hostKey) sessionStorage.setItem(hostKeyName(s.match), s.hostKey);
       } else {
         setRole(s.match, null);
         sessionStorage.setItem(`seat-${s.game}-${s.match}`, JSON.stringify(s.seat));
@@ -859,7 +926,7 @@ async function tv() {
   const qr = await QRCode.toDataURL(joinURL, { width: 280, margin: 2 });
   const isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
   const client = connect();
-    saveSession(`tv:${gameID}:${matchID}`, { game: gameID, match: matchID, tv: true });
+    saveSession(`tv:${gameID}:${matchID}`, { game: gameID, match: matchID, tv: true, hostKey: getHostKey(matchID) });
   let frame = null;
   let lastState = null;
   client.start();
@@ -1035,21 +1102,41 @@ function allJoined(client) {
   return seats.length > 0 && seats.every((p) => p.name);
 }
 
+// Does the server still hold this seat for us? (It frees seats whose phone stayed offline.)
+// Only open-join games free seats. If the server cannot be reached, assume yes.
+async function seatValid(seat) {
+  if (!entry || !entry.openJoin) return true;
+  try {
+    const res = await fetch(`${SERVER}/seat/${matchID}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ playerID: seat.playerID, credentials: seat.credentials }),
+    });
+    if (res.status === 403) return false;
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
 async function phone() {
   // Same tab (for example a refresh): carry straight on
   const inTab = JSON.parse(
     sessionStorage.getItem(`seat-${gameID}-${matchID}`) || 'null'
   );
   if (inTab) {
-    if (await roomExists(gameID, matchID)) return playPhone(inTab);
+    const exists = await roomExists(gameID, matchID);
+    if (exists && (await seatValid(inTab))) return playPhone(inTab);
     sessionStorage.removeItem(`seat-${gameID}-${matchID}`);
     forgetSession(seatKey());
-    return joinForm('That room has ended. You can join again if the host starts a new one.');
+    return joinForm(
+      exists ? SEAT_NOTICE : 'That room has ended. You can join again if the host starts a new one.'
+    );
   }
 
   // A returning player on this device (the tab was closed): offer to continue
   const saved = loadSessions()[seatKey()];
-  if (saved && saved.seat && (await roomExists(gameID, matchID))) {
+  if (saved && saved.seat && (await roomExists(gameID, matchID)) && (await seatValid(saved.seat))) {
     app.innerHTML = `
       <div class="page">
         <h1>${esc(entry.name)}</h1>
@@ -1066,7 +1153,7 @@ async function phone() {
     return;
   }
   if (saved) forgetSession(seatKey());
-  joinForm();
+  joinForm(takeSeatNotice());
 }
 
 // ---- Phone: a seated player. Can flip between "my screen" and the TV view ----
@@ -1116,7 +1203,12 @@ function playPhone(seat) {
 
   player.start();
   watcher.start();
-  watchSeats(player, draw);
+  // One poll refreshes both connections (so the TV view's names stay current), and tells
+  // this phone if the server has given its seat away.
+  watchSeats([player, watcher], draw, (players) => {
+    const mine = players.find((p) => String(p.id) === String(seat.playerID));
+    if (mine && !mine.name) seatLost();
+  });
   player.subscribe((state) => {
     if (!state) return;
     latest.player = state;

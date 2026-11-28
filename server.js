@@ -69,6 +69,31 @@ const roomCode = () => {
   return code;
 };
 
+// Host keys: the TV that creates a room claims it with a secret key, and only that key can
+// close the room. Only a hash is kept. (In memory, like the rooms themselves.)
+const hostKeys = new Map(); // room code -> sha256 hex of the key
+const sha = (text) => crypto.createHash('sha256').update(String(text)).digest();
+const sameSecret = (a, b) => crypto.timingSafeEqual(sha(a), sha(b));
+const KEY_FORMAT = /^[0-9a-f]{32}$/;
+
+// Reads a small JSON body. Always gives back an object (a body of null, a number or junk
+// becomes {}), so callers can read fields without checking.
+async function readBody(ctx) {
+  let body = {};
+  try {
+    let raw = '';
+    for await (const chunk of ctx.req) {
+      raw += chunk;
+      if (raw.length > 2000) break;
+    }
+    body = JSON.parse(raw);
+  } catch (e) {
+    body = {};
+  }
+  if (!body || typeof body !== 'object') body = {};
+  return body;
+}
+
 // Pages opened from home-network addresses (phones on Wi-Fi), any port
 const LAN =
   /^http:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/;
@@ -99,17 +124,7 @@ server.run(PORT, () => {
     if (vacate && ctx.method === 'POST') {
       ctx.set('Access-Control-Allow-Origin', '*');
       const code = vacate[1].toUpperCase();
-      let body = {};
-      try {
-        let raw = '';
-        for await (const chunk of ctx.req) {
-          raw += chunk;
-          if (raw.length > 2000) break;
-        }
-        body = JSON.parse(raw);
-      } catch (e) {
-        body = {};
-      }
+      const body = await readBody(ctx);
       let metadata = null;
       try {
         ({ metadata } = await server.db.fetch(code, { metadata: true }));
@@ -134,11 +149,73 @@ server.run(PORT, () => {
     if (closing && ctx.method === 'POST') {
       ctx.set('Access-Control-Allow-Origin', '*');
       const code = closing[1].toUpperCase();
+      const body = await readBody(ctx);
+      const expected = hostKeys.get(code);
+      // Only the TV that claimed the room can close it
+      if (!expected || typeof body.hostKey !== 'string' || !sameSecret(sha(body.hostKey).toString('hex'), expected)) {
+        ctx.status = 403;
+        ctx.body = { error: 'Not the host' };
+        return;
+      }
       try {
         await server.db.wipe(code);
-        issued.delete(code);
       } catch (e) {
         /* already gone */
+      }
+      issued.delete(code);
+      hostKeys.delete(code);
+      ctx.body = {};
+      return;
+    }
+    // The TV claims a room it has just created: POST /host/ABCD  {"hostKey":"<32 hex chars>"}
+    // Works once per room; after that the room has an owner.
+    const claiming = ctx.path.match(/^\/host\/([A-Za-z]{4})$/);
+    if (claiming && ctx.method === 'POST') {
+      ctx.set('Access-Control-Allow-Origin', '*');
+      const code = claiming[1].toUpperCase();
+      const body = await readBody(ctx);
+      let metadata = null;
+      try {
+        ({ metadata } = await server.db.fetch(code, { metadata: true }));
+      } catch (e) {
+        metadata = null;
+      }
+      if (!metadata) {
+        ctx.status = 404;
+        ctx.body = { error: 'No such room' };
+        return;
+      }
+      if (typeof body.hostKey !== 'string' || !KEY_FORMAT.test(body.hostKey)) {
+        ctx.status = 400;
+        ctx.body = { error: 'Bad key' };
+        return;
+      }
+      if (hostKeys.has(code)) {
+        ctx.status = 409;
+        ctx.body = { error: 'Already claimed' };
+        return;
+      }
+      hostKeys.set(code, sha(body.hostKey).toString('hex'));
+      ctx.body = {};
+      return;
+    }
+    // Does this seat still belong to the caller? POST /seat/ABCD {"playerID":"0","credentials":"..."}
+    const seatCheck = ctx.path.match(/^\/seat\/([A-Za-z]{4})$/);
+    if (seatCheck && ctx.method === 'POST') {
+      ctx.set('Access-Control-Allow-Origin', '*');
+      const code = seatCheck[1].toUpperCase();
+      const body = await readBody(ctx);
+      let metadata = null;
+      try {
+        ({ metadata } = await server.db.fetch(code, { metadata: true }));
+      } catch (e) {
+        metadata = null;
+      }
+      const seat = metadata && metadata.players && metadata.players[body.playerID];
+      if (!seat || typeof body.credentials !== 'string' || seat.credentials !== body.credentials) {
+        ctx.status = 403;
+        ctx.body = { error: 'Not your seat' };
+        return;
       }
       ctx.body = {};
       return;
@@ -194,9 +271,51 @@ setInterval(async () => {
     for (const id of old) {
       await server.db.wipe(id);
       issued.delete(id);
+      hostKeys.delete(id);
     }
     if (old.length) console.log(`Cleaned up ${old.length} old rooms`);
   } catch (e) {
     console.log('Cleanup skipped:', e.message);
   }
 }, 10 * 60 * 1000);
+
+// Free the seats of phones that closed their tab (or lost their connection for good).
+// boardgame.io marks a seat isConnected:false when its socket drops; a refresh reconnects
+// within seconds, so a seat is only given up after it has been offline for SEAT_GRACE_MS.
+// A seat that has never connected (no isConnected value yet) counts as offline too, so a
+// phone that joined and then died before its socket opened does not hold the seat forever.
+// Only open-join games do this: fixed-seat games need every seat to stay reserved.
+const SEAT_GRACE_MS = Number(process.env.SEAT_GRACE_MS) || 60 * 1000;
+const openJoinGames = new Set(loaded.filter((g) => g.manifest.openJoin === true).map((g) => g.manifest.id));
+const offlineSince = new Map(); // "CODE:seat" -> when it was first seen offline
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    const stillOffline = new Set();
+    for (const id of await server.db.listMatches({})) {
+      let { metadata } = await server.db.fetch(id, { metadata: true });
+      if (!metadata || !openJoinGames.has(metadata.gameName)) continue;
+      for (const [pid, seat] of Object.entries(metadata.players || {})) {
+        // Offline means "not known to be connected": a seat that joined but never opened a
+        // socket has no isConnected value at all, and must expire too.
+        if (!seat.name || seat.isConnected === true) continue;
+        const key = `${id}:${pid}`;
+        stillOffline.add(key);
+        if (!offlineSince.has(key)) offlineSince.set(key, now);
+        if (now - offlineSince.get(key) < SEAT_GRACE_MS) continue;
+        // Look again right before writing, in case the phone has just come back
+        ({ metadata } = await server.db.fetch(id, { metadata: true }));
+        const fresh = metadata && metadata.players && metadata.players[pid];
+        if (!fresh || !fresh.name || fresh.isConnected === true) continue;
+        delete fresh.name;
+        delete fresh.credentials;
+        await server.db.setMetadata(id, metadata);
+        offlineSince.delete(key);
+        console.log(`Freed seat ${pid} in room ${id} (offline too long)`);
+      }
+    }
+    for (const key of offlineSince.keys()) if (!stillOffline.has(key)) offlineSince.delete(key);
+  } catch (e) {
+    console.log('Seat check skipped:', e.message);
+  }
+}, 10 * 1000);
